@@ -17,13 +17,25 @@ public final class CanonCamera: @unchecked Sendable {
         self.queue = queue
     }
 
+    private var isClosed = false
+
     deinit {
-        gp_camera_exit(camera, context)
+        if !isClosed { gp_camera_exit(camera, context) }
         gp_camera_unref(camera)
         gp_context_unref(context)
     }
 
-    /// Connects to the first camera libgphoto2 finds.
+    /// Ends live view and the camera session so the next app can connect straight away.
+    /// Safe to call more than once; later calls on a closed camera fail.
+    public func close() {
+        queue.sync {
+            guard !isClosed else { return }
+            isClosed = true
+            gp_camera_exit(camera, context)
+        }
+    }
+
+    /// Connects to the first Canon camera on USB, ignoring other cameras such as a plugged-in iPhone.
     ///
     /// macOS's ptpcamerad grabs every PTP camera as soon as it's plugged in, so it's
     /// stopped first and the claim is retried while it respawns.
@@ -31,28 +43,93 @@ public final class CanonCamera: @unchecked Sendable {
         let queue = DispatchQueue(label: "VENCamera.gphoto2")
         return try queue.sync {
             guard let context = gp_context_new() else { throw GPhotoError(code: GP_ERROR_NO_MEMORY, call: "gp_context_new") }
-            var camera: UnsafeMutablePointer<Camera>?
-            try check(gp_camera_new(&camera), "gp_camera_new")
-            guard let camera else { throw GPhotoError(code: GP_ERROR_NO_MEMORY, call: "gp_camera_new") }
+            var lastError = GPhotoError(code: GP_ERROR_MODEL_NOT_FOUND, call: "Canon camera detection")
+            do {
+                // libgphoto2 can list the same camera twice (one entry is a stale port), so try each.
+                for (model, port) in try detectCanonCameras(context) {
+                    do {
+                        let camera = try open(model: model, port: port, context: context)
+                        return CanonCamera(camera: camera, context: context, model: model, queue: queue)
+                    } catch let error as GPhotoError {
+                        lastError = error
+                    }
+                }
+            } catch {
+                gp_context_unref(context)
+                throw error
+            }
+            gp_context_unref(context)
+            throw lastError
+        }
+    }
+
+    private static func detectCanonCameras(_ context: OpaquePointer) throws -> [(model: String, port: String)] {
+        var abilitiesList: OpaquePointer?
+        var portList: OpaquePointer?
+        var detected: OpaquePointer?
+        try check(gp_abilities_list_new(&abilitiesList), "gp_abilities_list_new")
+        defer { gp_abilities_list_free(abilitiesList) }
+        try check(gp_port_info_list_new(&portList), "gp_port_info_list_new")
+        defer { gp_port_info_list_free(portList) }
+        try check(gp_list_new(&detected), "gp_list_new")
+        defer { gp_list_unref(detected) }
+
+        try check(gp_abilities_list_load(abilitiesList, context), "gp_abilities_list_load")
+        try check(gp_port_info_list_load(portList), "gp_port_info_list_load")
+        try check(gp_abilities_list_detect(abilitiesList, portList, detected, context), "gp_abilities_list_detect")
+
+        var cameras: [(String, String)] = []
+        for index in 0..<max(0, gp_list_count(detected)) {
+            var name: UnsafePointer<CChar>?
+            var port: UnsafePointer<CChar>?
+            guard gp_list_get_name(detected, index, &name) >= GP_OK,
+                  gp_list_get_value(detected, index, &port) >= GP_OK,
+                  let name, let port
+            else { continue }
+            let model = String(cString: name)
+            if model.hasPrefix("Canon") { cameras.append((model, String(cString: port))) }
+        }
+        return cameras
+    }
+
+    private static func open(model: String, port: String, context: OpaquePointer) throws -> UnsafeMutablePointer<Camera> {
+        var abilitiesList: OpaquePointer?
+        var portList: OpaquePointer?
+        try check(gp_abilities_list_new(&abilitiesList), "gp_abilities_list_new")
+        defer { gp_abilities_list_free(abilitiesList) }
+        try check(gp_port_info_list_new(&portList), "gp_port_info_list_new")
+        defer { gp_port_info_list_free(portList) }
+        try check(gp_abilities_list_load(abilitiesList, context), "gp_abilities_list_load")
+        try check(gp_port_info_list_load(portList), "gp_port_info_list_load")
+
+        var camera: UnsafeMutablePointer<Camera>?
+        try check(gp_camera_new(&camera), "gp_camera_new")
+        guard let camera else { throw GPhotoError(code: GP_ERROR_NO_MEMORY, call: "gp_camera_new") }
+        do {
+            var abilities = CameraAbilities()
+            let modelIndex = try check(gp_abilities_list_lookup_model(abilitiesList, model), "gp_abilities_list_lookup_model")
+            try check(gp_abilities_list_get_abilities(abilitiesList, modelIndex, &abilities), "gp_abilities_list_get_abilities")
+            try check(gp_camera_set_abilities(camera, abilities), "gp_camera_set_abilities")
+
+            var portInfo: GPPortInfo?
+            let portIndex = try check(gp_port_info_list_lookup_path(portList, port), "gp_port_info_list_lookup_path")
+            try check(gp_port_info_list_get_info(portList, portIndex, &portInfo), "gp_port_info_list_get_info")
+            try check(gp_camera_set_port_info(camera, portInfo), "gp_camera_set_port_info")
 
             var attempt = 0
             while true {
                 stopPTPCameraDaemon()
                 let result = gp_camera_init(camera, context)
-                if result >= GP_OK { break }
+                if result >= GP_OK { return camera }
                 attempt += 1
                 if result != GP_ERROR_IO_USB_CLAIM || attempt == 5 {
-                    gp_camera_unref(camera)
-                    gp_context_unref(context)
-                    throw GPhotoError(code: result, call: "gp_camera_init")
+                    throw GPhotoError(code: result, call: "gp_camera_init(\(port))")
                 }
                 Thread.sleep(forTimeInterval: 0.3)
             }
-
-            var abilities = CameraAbilities()
-            gp_camera_get_abilities(camera, &abilities)
-            let model = withUnsafeBytes(of: abilities.model) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-            return CanonCamera(camera: camera, context: context, model: model, queue: queue)
+        } catch {
+            gp_camera_unref(camera)
+            throw error
         }
     }
 

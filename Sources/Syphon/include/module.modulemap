@@ -1,0 +1,5 @@
+module Syphon {
+    header "Syphon/SyphonServerBase.h"
+    header "Syphon/SyphonMetalServer.h"
+    export *
+}

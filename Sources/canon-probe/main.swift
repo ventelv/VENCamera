@@ -1,8 +1,9 @@
 // canon-probe: measures what the connected Canon camera really delivers over USB.
 //
-// Usage: canon-probe [seconds] [--all]
-//   seconds  how long to measure live view (default 10)
-//   --all    print every setting the camera exposes, not just the control panel ones
+// Usage: canon-probe [seconds] [--all] [name=value ...]
+//   seconds     how long to measure live view (default 10)
+//   --all       print every setting the camera exposes, not just the control panel ones
+//   name=value  change a setting first, e.g. exposurecompensation=0.3 or whitebalance=Daylight
 // Run it once with the M50's mode dial on Movie and once on a photo mode.
 
 import CanonKit
@@ -12,6 +13,7 @@ import ImageIO
 let arguments = CommandLine.arguments.dropFirst()
 let seconds = arguments.compactMap(Double.init).first ?? 10
 let printAll = arguments.contains("--all")
+let changes = arguments.filter { $0.contains("=") }.map { $0.split(separator: "=", maxSplits: 1).map(String.init) }
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -48,6 +50,17 @@ do {
     fail("Couldn't connect: \(error)")
 }
 print("Connected: \(camera.model)\n")
+
+for change in changes {
+    do {
+        try camera.set(change[0], to: change[1])
+        let now = try camera.setting(change[0]).value.map(String.init(describing:)) ?? "—"
+        print("Set \(change[0]) to \(change[1]); the camera now reports \(now)")
+    } catch {
+        print("Couldn't set \(change[0]): \(error)")
+    }
+}
+if !changes.isEmpty { print() }
 
 if printAll {
     print("All settings")
