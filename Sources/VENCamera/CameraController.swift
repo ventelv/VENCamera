@@ -146,27 +146,34 @@ final class CameraController: ObservableObject {
             var frames = 0
             var windowStart = Date()
             while !Thread.current.isCancelled {
-                guard let jpeg = try? camera.capturePreview(), let frame = Self.decode(jpeg) else {
-                    failures += 1
-                    if failures >= 5 {
-                        Task { @MainActor in owner.value?.disconnect(reason: "Lost the camera. Check that it's on and plugged in.") }
-                        return
+                // Core Image, Metal and Syphon hand back autoreleased objects every frame. This
+                // thread never returns to a run loop, so without a pool per frame they're never
+                // freed and memory grows by gigabytes an hour.
+                let keepGoing: Bool = autoreleasepool {
+                    guard let jpeg = try? camera.capturePreview(), let frame = Self.decode(jpeg) else {
+                        failures += 1
+                        if failures >= 5 {
+                            Task { @MainActor in owner.value?.disconnect(reason: "Lost the camera. Check that it's on and plugged in.") }
+                            return false
+                        }
+                        Thread.sleep(forTimeInterval: 0.1)
+                        return true
                     }
-                    Thread.sleep(forTimeInterval: 0.1)
-                    continue
-                }
-                failures = 0
-                pipeline?.publish(frame, mirrored: options.mirrored, sharpness: options.sharpness)
-                preview.show(frame, mirrored: options.mirrored)
+                    failures = 0
+                    pipeline?.publish(frame, mirrored: options.mirrored, sharpness: options.sharpness)
+                    preview.show(frame, mirrored: options.mirrored)
 
-                frames += 1
-                let elapsed = Date().timeIntervalSince(windowStart)
-                if elapsed >= 1 {
-                    let fps = Double(frames) / elapsed
-                    frames = 0
-                    windowStart = Date()
-                    Task { @MainActor in owner.value?.framesPerSecond = fps }
+                    frames += 1
+                    let elapsed = Date().timeIntervalSince(windowStart)
+                    if elapsed >= 1 {
+                        let fps = Double(frames) / elapsed
+                        frames = 0
+                        windowStart = Date()
+                        Task { @MainActor in owner.value?.framesPerSecond = fps }
+                    }
+                    return true
                 }
+                if !keepGoing { return }
             }
         }
         thread.name = "VENCamera.liveView"

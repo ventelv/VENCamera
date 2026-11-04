@@ -10,13 +10,27 @@ final class PreviewSink: @unchecked Sendable {
         lock.withLock { self.layer = layer }
     }
 
+    /// Only the newest frame is kept, so frames can't pile up if the main thread is busy.
+    private var pending: (frame: CGImage, mirrored: Bool)?
+
     func show(_ frame: CGImage, mirrored: Bool) {
-        guard let layer = lock.withLock({ self.layer }) else { return }
-        DispatchQueue.main.async {
+        let needsUpdate: Bool = lock.withLock {
+            guard layer != nil else { return false }
+            let wasIdle = pending == nil
+            pending = (frame, mirrored)
+            return wasIdle
+        }
+        guard needsUpdate else { return }
+        DispatchQueue.main.async { [self] in
+            guard let (layer, next) = lock.withLock({ () -> (CALayer, (frame: CGImage, mirrored: Bool))? in
+                defer { pending = nil }
+                guard let layer, let pending else { return nil }
+                return (layer, pending)
+            }) else { return }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            layer.contents = frame
-            layer.setAffineTransform(mirrored ? CGAffineTransform(scaleX: -1, y: 1) : .identity)
+            layer.contents = next.frame
+            layer.setAffineTransform(next.mirrored ? CGAffineTransform(scaleX: -1, y: 1) : .identity)
             CATransaction.commit()
         }
     }
