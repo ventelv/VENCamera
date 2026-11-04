@@ -3,7 +3,9 @@
 // Usage: canon-probe [seconds] [--all] [name=value ...]
 //   seconds     how long to measure live view (default 10)
 //   --all       print every setting the camera exposes, not just the control panel ones
-//   name=value  change a setting first, e.g. exposurecompensation=0.3 or whitebalance=Daylight
+//   name=value  change a setting while live view runs (as VENCamera does), e.g.
+//               exposurecompensation=0.3 or whitebalance=Daylight, and report the
+//               picture's brightness and color before and after
 // Run it once with the M50's mode dial on Movie and once on a photo mode.
 
 import CanonKit
@@ -29,6 +31,32 @@ func pixelSize(ofJPEG data: Data) -> String? {
     return "\(width)×\(height)"
 }
 
+/// The frame's average red, green and blue (0–255), from a small downscaled copy.
+func averageColor(ofJPEG data: Data) -> (r: Double, g: Double, b: Double)? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return nil }
+    let width = 32, height = 18
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    guard let context = CGContext(
+        data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+    ) else { return nil }
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    var sums = (0.0, 0.0, 0.0)
+    for index in stride(from: 0, to: pixels.count, by: 4) {
+        sums.0 += Double(pixels[index]); sums.1 += Double(pixels[index + 1]); sums.2 += Double(pixels[index + 2])
+    }
+    let count = Double(width * height)
+    return (sums.0 / count, sums.1 / count, sums.2 / count)
+}
+
+func describeColor(_ color: (r: Double, g: Double, b: Double)?) -> String {
+    guard let color else { return "unreadable" }
+    let brightness = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    return String(format: "brightness %.0f, red/blue %.2f", brightness, color.r / max(color.b, 1))
+}
+
 func describe(_ setting: CameraSetting) -> String {
     let value = setting.value.map(String.init(describing:)) ?? "—"
     let access = setting.isReadOnly ? " (read-only)" : ""
@@ -50,17 +78,6 @@ do {
     fail("Couldn't connect: \(error)")
 }
 print("Connected: \(camera.model)\n")
-
-for change in changes {
-    do {
-        try camera.set(change[0], to: change[1])
-        let now = try camera.setting(change[0]).value.map(String.init(describing:)) ?? "—"
-        print("Set \(change[0]) to \(change[1]); the camera now reports \(now)")
-    } catch {
-        print("Couldn't set \(change[0]): \(error)")
-    }
-}
-if !changes.isEmpty { print() }
 
 if printAll {
     print("All settings")
@@ -90,6 +107,26 @@ var previous = Data()
 let warmUp = Date().addingTimeInterval(1)
 while Date() < warmUp {
     do { previous = try camera.capturePreview() } catch { fail("Live view failed: \(error)") }
+}
+
+if !changes.isEmpty {
+    print("\nChanging settings during live view")
+    print("  Before:  \(describeColor(averageColor(ofJPEG: previous)))")
+    for change in changes {
+        do {
+            try camera.set(change[0], to: change[1])
+            let now = try camera.setting(change[0]).value.map(String.init(describing:)) ?? "—"
+            print("  Set \(change[0]) to \(change[1]); the camera now reports \(now)")
+        } catch {
+            print("  Couldn't set \(change[0]): \(error)")
+        }
+    }
+    // Keep live view running while the camera's exposure and white balance settle.
+    let settle = Date().addingTimeInterval(2)
+    while Date() < settle {
+        if let frame = try? camera.capturePreview(), !frame.isEmpty { previous = frame }
+    }
+    print("  After:   \(describeColor(averageColor(ofJPEG: previous)))")
 }
 
 print("\nMeasuring live view for \(Int(seconds)) s…")

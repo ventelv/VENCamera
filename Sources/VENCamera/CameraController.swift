@@ -2,6 +2,9 @@ import AppKit
 import CanonKit
 import CGPhoto2
 import ImageIO
+import os
+
+let log = Logger(subsystem: "com.ventel.VENCamera", category: "camera")
 
 /// Owns the camera connection, the live view loop and the settings the UI shows.
 @MainActor
@@ -14,7 +17,9 @@ final class CameraController: ObservableObject {
         case failed(String)
     }
 
-    @Published private(set) var status: Status = .searching
+    @Published private(set) var status: Status = .searching {
+        didSet { if status != oldValue { log.notice("Status: \(String(describing: self.status), privacy: .public)") } }
+    }
     @Published private(set) var model = ""
     @Published private(set) var framesPerSecond = 0.0
     @Published private(set) var settings: [String: CameraSetting] = [:]
@@ -25,11 +30,11 @@ final class CameraController: ObservableObject {
     @Published var sharpness = UserDefaults.standard.object(forKey: "sharpness") as? Double ?? 0.4 {
         didSet { UserDefaults.standard.set(sharpness, forKey: "sharpness"); frameOptions.sharpness = sharpness }
     }
-    /// Take the camera from Canon's webcam service automatically, so VENCamera works every time.
     /// Open OBS in the background with its virtual camera on whenever the camera connects.
     @Published var startsOBS = UserDefaults.standard.object(forKey: "startsOBS") as? Bool ?? true {
         didSet { UserDefaults.standard.set(startsOBS, forKey: "startsOBS"); if startsOBS, status == .live { OBSLauncher.launchIfNeeded() } }
     }
+    /// Take the camera from Canon's webcam service automatically, so VENCamera works every time.
     @Published var takesCameraFromCanon = UserDefaults.standard.object(forKey: "takesCameraFromCanon") as? Bool ?? true {
         didSet { UserDefaults.standard.set(takesCameraFromCanon, forKey: "takesCameraFromCanon") }
     }
@@ -45,6 +50,8 @@ final class CameraController: ObservableObject {
     private var liveViewStopped: DispatchSemaphore?
     private var reconnectTimer: Timer?
     private var settingsTimer: Timer?
+    /// While the Mac sleeps the camera is closed and no reconnects are attempted.
+    private var isAsleep = false
 
     init() {
         frameOptions.mirrored = mirrored
@@ -52,7 +59,33 @@ final class CameraController: ObservableObject {
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.connectIfNeeded() }
         }
+        observeSleep()
         connectIfNeeded()
+    }
+
+    /// USB devices are suspended while the Mac sleeps, and a PTP session left open across
+    /// sleep can leave the M50 stuck until it's power cycled. So the session is closed before
+    /// sleep and reopened after wake.
+    private func observeSleep() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                log.notice("Mac is going to sleep; closing the camera")
+                self?.isAsleep = true
+                self?.disconnect(reason: nil, waitForClose: true)
+            }
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                log.notice("Mac woke up; reconnecting shortly")
+                // Give USB a moment to come back before claiming the camera again.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    self?.isAsleep = false
+                    self?.connectIfNeeded()
+                }
+            }
+        }
     }
 
     var outputIsAvailable: Bool { pipeline != nil }
@@ -62,7 +95,7 @@ final class CameraController: ObservableObject {
     private var isConnecting = false
 
     func connectIfNeeded() {
-        guard camera == nil, !isConnecting, status != .handedBackToCanon else { return }
+        guard camera == nil, !isConnecting, !isAsleep, status != .handedBackToCanon else { return }
         isConnecting = true
         let takeFromCanon = takesCameraFromCanon
         work.async { [self] in
@@ -77,6 +110,11 @@ final class CameraController: ObservableObject {
 
     private func finishConnecting(_ result: Result<CanonCamera, Error>) {
         isConnecting = false
+        if case .failure(let error) = result { log.info("Connect failed: \(String(describing: error), privacy: .public)") }
+        if isAsleep, case .success(let camera) = result {
+            camera.close() // The Mac started sleeping while this connect was in flight.
+            return
+        }
         switch result {
         case .success(let camera):
             self.camera = camera
@@ -108,22 +146,27 @@ final class CameraController: ObservableObject {
 
     /// Lets go of the camera and restarts Canon's webcam app, until you take it back.
     func handCameraBackToCanon() {
-        disconnect(reason: nil)
+        disconnect(reason: nil, waitForClose: true)
         status = .handedBackToCanon
         work.async { CanonWebcamService.restore() }
     }
 
     /// Stops live view and closes the camera session cleanly. Called when quitting, too.
     func shutdown() {
-        disconnect(reason: nil)
+        disconnect(reason: nil, waitForClose: true)
     }
 
-    private func disconnect(reason: String?) {
+    /// Closing a camera that has vanished can block until USB times out, so unless the caller
+    /// must know it's closed (quitting, sleeping, handing it back), it's closed off the main thread.
+    private func disconnect(reason: String?, waitForClose: Bool = false) {
+        if let reason { log.notice("Disconnecting: \(reason, privacy: .public)") }
         liveView?.cancel()
         _ = liveViewStopped?.wait(timeout: .now() + 1)
         liveView = nil
         liveViewStopped = nil
-        camera?.close()
+        if let closing = camera {
+            if waitForClose { closing.close() } else { work.async { closing.close() } }
+        }
         camera = nil
         framesPerSecond = 0
         preview.clear()
@@ -219,7 +262,12 @@ final class CameraController: ObservableObject {
             let result = Result { try camera.set(name, to: value) }
             let updated = try? camera.setting(name)
             Task { @MainActor in
-                if case .failure(let error) = result { lastError = "Couldn't change \(name): \(error)" }
+                if case .failure(let error) = result {
+                    lastError = "Couldn't change \(name): \(error)"
+                    log.error("Couldn't change \(name, privacy: .public) to \(value, privacy: .public): \(String(describing: error), privacy: .public)")
+                } else {
+                    log.info("Changed \(name, privacy: .public) to \(value, privacy: .public)")
+                }
                 if let updated { settings[name] = updated }
             }
         }
