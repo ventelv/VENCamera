@@ -39,8 +39,8 @@ Before the repository was published, the code, the build files and the full git 
 |---|---|---|
 | A closed camera session could be silently reopened, because libgphoto2 reconnects on the next call. A late settings refresh could then hold the camera indefinitely, for example across sleep. | Medium: camera stays claimed, other apps locked out | Closed sessions now refuse every call. |
 | Canon's webcam service was paused automatically, without asking. | Medium: changes another vendor's software without consent | Now opt-in: VENCamera asks the first time and remembers the answer. |
-| Memory grew by about 70 MB a second while live (26 GB observed), which can make a Mac unresponsive. | High: availability | Fixed in `675cf63`. Memory now stays at about 60–100 MB. |
-| A camera session left open across Mac sleep could leave the camera unresponsive until it was switched off and on. | Low: availability | Fixed in `c2f5b3d`. The session is now closed before sleep and reopened after wake. |
+| Memory grew by about 70 MB a second while live (26 GB observed), which can make a Mac unresponsive. | High: availability | Fixed in `a58505f`. Memory now stays at about 60–100 MB. |
+| A camera session left open across Mac sleep could leave the camera unresponsive until it was switched off and on. | Low: availability | Fixed in `baf179c`. The session is now closed before sleep and reopened after wake. |
 | The README referred to the author's own Mac and to a private file path. | Low: personal information | Rewritten for public readers. |
 
 ### Checked, no problem found
@@ -51,10 +51,12 @@ Before the repository was published, the code, the build files and the full git 
 - **Third-party code:** Syphon is vendored from a recorded upstream commit, with every change listed in `Sources/Syphon/VENDORED.md`. libgphoto2 and OBS come from Homebrew.
 - **Build files:** `Package.swift` and the `Makefile` only build, copy and ad-hoc sign the app. The only file `make install` deletes is a previous `/Applications/VENCamera.app`.
 
-### Open items for the repository owner
-- **License:** the repository has no license, so others aren't legally allowed to reuse the code. Add one before making it public.
-- **Author email in history:** every commit lists the author's email address. On a public repository it can be seen and scraped. To hide it, the history has to be rewritten with a GitHub `noreply` address before publishing.
-- **GitHub settings:** turn on *Private vulnerability reporting* and *Secret scanning with push protection* (free for public repositories) in the repository's security settings.
+### Done before publishing
+- **License:** MIT, in `LICENSE`. The vendored Syphon code keeps its BSD-2 license.
+- **Personal information:** every file version, commit message and commit identity in the history was checked for personal details (email addresses, home folder paths, device and computer names, network addresses). The author's personal email was replaced with a GitHub `noreply` address throughout the history.
+- **GitHub settings:** *Private vulnerability reporting*, *Secret scanning* and *Push protection* are on.
+
+### Still open
 - **Prebuilt downloads:** only offer these after setting up Developer ID signing, the hardened runtime and Apple notarization, and bundling libgphoto2 with its LGPL notice.
 
 ## Reporting a vulnerability

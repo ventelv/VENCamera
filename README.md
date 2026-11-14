@@ -83,3 +83,6 @@ Quit VENCamera first, because only one app can use the camera. Add `name=value` 
 - `Sources/CanonKit/`: Swift wrapper. `CanonCamera` handles connecting, the settings tree, reading and changing settings, and live view, with every call going through one serial queue. `CanonSettingName` lists the setting names.
 - `Sources/canon-probe/`: the Phase 1 measurement tool.
 - `Tools/make-icon.swift`: draws the app icon. `make icon` rebuilds `Resources/AppIcon.icns` from it.
+
+## License
+MIT. See [LICENSE](LICENSE). The vendored Syphon code in `Sources/Syphon/` is BSD-2-Clause.
