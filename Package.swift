@@ -26,7 +26,7 @@ let package = Package(
         // vendored because Syphon has no SwiftPM package. OBS reads our frames through it.
         .target(
             name: "Syphon",
-            exclude: ["LICENSE.txt"],
+            exclude: ["LICENSE.txt", "VENDORED.md"],
             cSettings: [
                 .headerSearchPath("include/Syphon"),
                 .unsafeFlags(["-include", "\(root)/Sources/Syphon/Syphon_Prefix.h", "-Wno-deprecated-declarations"]),

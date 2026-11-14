@@ -5,3 +5,6 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 probe-frame.jpg
+
+# Claude Code local settings
+.claude/settings.local.json

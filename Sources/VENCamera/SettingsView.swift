@@ -47,7 +47,10 @@ private struct StatusOverlay: View {
             message("Looking for the camera…", detail: "Switch the M50 on and connect it with the USB cable.")
         case .blockedByCanonApp:
             VStack(spacing: 10) {
-                message("EOS Webcam Utility is using the camera", detail: "Only one app can use the camera at a time.")
+                message(
+                    "EOS Webcam Utility is using the camera",
+                    detail: "Only one app can use the camera at a time. VENCamera can quit Canon's app and pause its background service until you log out; Canon's files aren't changed. You can turn this off in the menu."
+                )
                 Button("Use the Camera in VENCamera") { camera.takeCameraFromCanon() }
             }
         case .handedBackToCanon:

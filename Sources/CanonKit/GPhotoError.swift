@@ -15,11 +15,13 @@ public struct GPhotoError: Error, CustomStringConvertible {
 public enum CanonError: Error, CustomStringConvertible {
     case noSuchSetting(String)
     case unsupportedSettingType(String)
+    case closed
 
     public var description: String {
         switch self {
         case .noSuchSetting(let name): return "The camera has no setting called \"\(name)\"."
         case .unsupportedSettingType(let name): return "The setting \"\(name)\" can't be set this way."
+        case .closed: return "The camera session has been closed."
         }
     }
 }

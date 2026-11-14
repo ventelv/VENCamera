@@ -27,6 +27,16 @@ public final class CanonCamera: @unchecked Sendable {
 
     /// Ends live view and the camera session so the next app can connect straight away.
     /// Safe to call more than once; later calls on a closed camera fail.
+    /// Runs `body` on the camera's queue, refusing once the camera is closed. libgphoto2
+    /// silently reopens a closed session on the next call, which would claim the camera
+    /// again behind VENCamera's back (for example across sleep) and never release it.
+    private func whileOpen<T>(_ body: () throws -> T) throws -> T {
+        try queue.sync {
+            guard !isClosed else { throw CanonError.closed }
+            return try body()
+        }
+    }
+
     public func close() {
         queue.sync {
             guard !isClosed else { return }
@@ -146,7 +156,7 @@ public final class CanonCamera: @unchecked Sendable {
 
     /// Every setting the camera exposes, depth first.
     public func allSettings() throws -> [CameraSetting] {
-        try queue.sync {
+        try whileOpen {
             var root: OpaquePointer?
             try check(gp_camera_get_config(camera, &root, context), "gp_camera_get_config")
             guard let root else { return [] }
@@ -158,7 +168,7 @@ public final class CanonCamera: @unchecked Sendable {
     }
 
     public func setting(_ name: String) throws -> CameraSetting {
-        try queue.sync {
+        try whileOpen {
             let widget = try singleConfig(name)
             defer { gp_widget_free(widget) }
             return Self.describe(widget, path: name)
@@ -167,7 +177,7 @@ public final class CanonCamera: @unchecked Sendable {
 
     /// Changes a text or choice setting, such as `set("iso", to: "400")`.
     public func set(_ name: String, to value: String) throws {
-        try queue.sync {
+        try whileOpen {
             let widget = try singleConfig(name)
             defer { gp_widget_free(widget) }
             switch Self.kind(of: widget) {
@@ -194,7 +204,7 @@ public final class CanonCamera: @unchecked Sendable {
 
     /// Captures one live view JPEG. The first call switches the camera into live view.
     public func capturePreview() throws -> Data {
-        try queue.sync {
+        try whileOpen {
             var file: OpaquePointer?
             try check(gp_file_new(&file), "gp_file_new")
             defer { gp_file_unref(file) }

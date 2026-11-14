@@ -35,7 +35,9 @@ final class CameraController: ObservableObject {
         didSet { UserDefaults.standard.set(startsOBS, forKey: "startsOBS"); if startsOBS, status == .live { OBSLauncher.launchIfNeeded() } }
     }
     /// Take the camera from Canon's webcam service automatically, so VENCamera works every time.
-    @Published var takesCameraFromCanon = UserDefaults.standard.object(forKey: "takesCameraFromCanon") as? Bool ?? true {
+    /// Off until you first choose "Use the Camera in VENCamera": stopping another vendor's
+    /// service should be your decision, not something the app does on its own.
+    @Published var takesCameraFromCanon = UserDefaults.standard.object(forKey: "takesCameraFromCanon") as? Bool ?? false {
         didSet { UserDefaults.standard.set(takesCameraFromCanon, forKey: "takesCameraFromCanon") }
     }
 
@@ -139,6 +141,7 @@ final class CameraController: ObservableObject {
 
     /// Takes the camera from Canon's webcam app and service right now.
     func takeCameraFromCanon() {
+        takesCameraFromCanon = true
         if status == .handedBackToCanon { status = .searching }
         work.async { CanonWebcamService.release() }
         connectIfNeeded()

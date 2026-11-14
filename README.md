@@ -1,10 +1,12 @@
 # VENCamera
 
-A personal webcam app for the Canon EOS M50 (Mk1) on this MacBook Pro (M1 Pro). It does what EOS Webcam Utility Pro does, without the subscription. It's built and installed directly on this Mac, with no App Store.
+A free macOS webcam app for the Canon EOS M50 (Mk1). It covers what EOS Webcam Utility Pro does (live view at up to 1080p, plus camera controls on your Mac) without the subscription. You build it from source on your own Mac; there's no App Store download and no prebuilt binary.
 
-It talks to the camera through [libgphoto2](http://gphoto.org/proj/libgphoto2/). That library is free, open source and installed with Homebrew, so there's no Canon account or SDK download.
+It talks to the camera through [libgphoto2](http://gphoto.org/proj/libgphoto2/). That library is free, open source and installed with Homebrew, so there's no Canon account or SDK download. It was built and tested on an Apple Silicon Mac (M1 Pro) running macOS 15. Other Canon EOS cameras that libgphoto2 supports may work, but only the M50 has been tested.
 
-The full plan is in `~/.claude/plans/plan-me-a-compelling-cosmic-backus.md`.
+VENCamera is an independent project and isn't affiliated with or endorsed by Canon. Canon and EOS are trademarks of Canon Inc.
+
+Before installing, read [SECURITY.md](SECURITY.md). It explains exactly what VENCamera does on your Mac.
 
 ## What the M50 delivers over USB (measured 2026-11-04 with `canon-probe`)
 These were measured with the mode dial on **Movie**:
@@ -31,9 +33,17 @@ In Movie mode with automatic exposure, aperture, shutter and ISO only offer "aut
 ```bash
 make install
 ```
-This builds VENCamera, copies it to `/Applications/VENCamera.app`, signs it to run on this Mac and opens it. No App Store or Apple account is involved. Run it again after any code change. To remove the app, run `make uninstall`.
+This builds VENCamera, copies it to `/Applications/VENCamera.app`, signs it to run on your Mac only (ad-hoc signing) and opens it. No App Store or Apple account is involved. Run it again after any code change. To remove the app, run `make uninstall`.
 
-Requirements: libgphoto2 (`brew install libgphoto2`) and OBS (`brew install --cask obs`). Both are already installed on this Mac.
+Requirements:
+- A Mac on macOS 14 or later, with the Xcode Command Line Tools (`xcode-select --install`). Only Apple Silicon has been tested.
+- [Homebrew](https://brew.sh), libgphoto2 and OBS:
+  ```bash
+  brew install libgphoto2
+  ```
+  ```bash
+  brew install --cask obs
+  ```
 
 ## Using VENCamera
 - **Menu bar:** a camera icon at the top of the screen. It's filled when the M50 is live and a warning triangle when something is wrong. The menu has *Open VENCamera…* (⌘,), *Mirror Image*, *Start at Login*, *Quit*, and buttons to take the camera from EOS Webcam Utility or hand it back.
@@ -51,7 +61,7 @@ Requirements: libgphoto2 (`brew install libgphoto2`) and OBS (`brew install --ca
 3. Recommended: a dummy battery (Canon ACK-E12 or a compatible one). Live view drains the LP-E12 battery in about an hour.
 
 ### How it stays reliable
-- **Canon's webcam service:** Canon's `EOSWebcamService` launch agent starts at login and holds the camera even when its app is closed. With *Always Take the Camera from Canon* on (the default), VENCamera quits Canon's app and stops that agent with `launchctl bootout`. That lasts until you log out, and Canon's files aren't touched. *Hand the Camera Back to EOS Webcam Utility* restarts it.
+- **Canon's webcam service:** if EOS Webcam Utility is installed, its `EOSWebcamService` launch agent starts at login and holds the camera even when its app is closed. The first time this happens, VENCamera asks before doing anything. If you choose *Use the Camera in VENCamera*, it quits Canon's app and pauses that agent with `launchctl bootout`. The pause lasts until you log out, and Canon's files aren't touched. Your choice is remembered (*Always Take the Camera from Canon* in the menu). *Hand the Camera Back to EOS Webcam Utility* restarts the agent.
 - **macOS's `ptpcamerad`:** this daemon grabs every camera that's plugged in. VENCamera stops it before connecting.
 - **Other cameras:** only Canon cameras are used. A plugged-in iPhone, which also shows up as a PTP camera, is skipped.
 - **Clean shutdown:** VENCamera closes the camera session when it quits. If the camera ever stops responding (PTP timeout), switch it off and on again, and VENCamera reconnects on its own.
@@ -68,7 +78,8 @@ Quit VENCamera first, because only one app can use the camera. Add `name=value` 
   - `FramePipeline`: Core Image Lanczos upscale to 1080p, then Syphon.
   - `SettingsView`: the settings window.
   - `CanonWebcamService` and `OBSLauncher`: handling for Canon's webcam app and OBS.
-- `Sources/Syphon/`: the Metal server part of [Syphon](https://github.com/Syphon/Syphon-Framework), vendored under BSD-2. Its shader is compiled when the app starts, because the Command Line Tools have no Metal compiler.
+- `Sources/Syphon/`: the Metal server part of [Syphon](https://github.com/Syphon/Syphon-Framework), vendored under BSD-2. See `Sources/Syphon/VENDORED.md` for the upstream commit and the changes made.
 - `Sources/CGPhoto2/`: module map for the Homebrew libgphoto2 (found through pkg-config).
 - `Sources/CanonKit/`: Swift wrapper. `CanonCamera` handles connecting, the settings tree, reading and changing settings, and live view, with every call going through one serial queue. `CanonSettingName` lists the setting names.
 - `Sources/canon-probe/`: the Phase 1 measurement tool.
+- `Tools/make-icon.swift`: draws the app icon. `make icon` rebuilds `Resources/AppIcon.icns` from it.
